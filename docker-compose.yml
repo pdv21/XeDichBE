@@ -10,7 +10,7 @@ services:
     restart: always
     environment:
       MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: langgit_db
+      MYSQL_DATABASE: xedich_db
       MYSQL_USER: xedich_user
       MYSQL_PASSWORD: xedich_password
     ports:
