@@ -21,4 +21,19 @@ const register = async ({name, email, password, confirmPassword}) => {
     return newUser;
 };
 
-module.exports = { register };
+const login = async ({email, password}) => {
+    const user = await authRepository.findUserByEmail(email);
+    if(!user) {
+        throw new Error('Invalid email or password');
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if(!isMatch) {
+        throw new Error('Invalid email or password');
+    }
+
+    const token = jwt.sign({userId: user.id}, process.env.JWT_SECRET, {expiresIn: '1h'});
+    return {token, user: { id: user.id, name: user.name, email: user.email }};
+}
+
+module.exports = { register, login };
