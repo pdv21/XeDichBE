@@ -39,7 +39,7 @@ const getCachedPrice = async (hotelKey, checkIn, checkOut) => {
 const cachePrice = async (hotelKey, checkIn, checkOut, price) => {
     const [result] = await db.execute(
         `INSERT INTO hotel_prices (hotel_key, check_in, check_out, price, expires_at)
-         VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))
+         VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 12 HOUR))
          ON DUPLICATE KEY UPDATE
          price = VALUES(price),
          provider   = VALUES(provider),
