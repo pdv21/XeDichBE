@@ -51,4 +51,36 @@ const login = async ({email, password}) => {
     return {token, user: { id: user.id, name: user.name, email: user.email }};
 }
 
-module.exports = { register, login, verifyOtp };
+const resetPassword = async ({email}) => {
+    const existingUser = await authRepository.findUserByEmail(email);
+    if(!existingUser) {
+        throw new Error('Email does not exist');
+    }
+
+    // Generate OTP and save to Redis
+    const otp = generateOTP();
+    saveOTP(email, {otp});
+    await sendOTP(email, otp);
+
+    return {email}; // trả về email để client biết gửi OTP đến đâu, không trả về userId ngay
+};
+
+const verifyResetOtp = async ({email, otp, password, confirmPassword}) => {
+    const record = verifyOTP(email, otp);
+    if(!record) {
+        throw new Error('Invalid or expired OTP');
+    }
+
+    if(password !== confirmPassword) {
+        throw new Error('Passwords do not match');
+    }
+
+    // Hash the new password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Update user password after OTP is verified
+    const updatedUser = await authRepository.updateUserPassword(email, hashedPassword); 
+    return updatedUser;
+}
+
+module.exports = { register, login, verifyOtp, resetPassword, verifyResetOtp };

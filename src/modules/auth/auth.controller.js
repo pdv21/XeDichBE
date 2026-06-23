@@ -13,8 +13,8 @@ const register = async (req, res) => {
 
 const verifyOtp = async (req, res) => {
     try {
-        const {email, otp, name, password} = req.body;
-        const newUser = await authService.verifyOtp({email, otp, name, password});
+        const {email, otp} = req.body;
+        const newUser = await authService.verifyOtp({email, otp});
         return response.ok(res, {userId: newUser}, 'User registered successfully', 201);
     } catch (error) {
         return response.error(res, error.message, 400);
@@ -42,4 +42,24 @@ const logout = async (req, res) => {
     return response.ok(res, null, 'Logout successful', 200);
 }
 
-module.exports = { register, login, logout, verifyOtp };
+const resetPassword = async (req, res) => {
+    try {
+        const {email} = req.body;
+        const result = await authService.resetPassword({email});
+        return response.ok(res, result, 'OTP sent successfully', 200);
+    } catch (error) {
+        return response.error(res, error.message, 400);
+    }   
+}
+
+const verifyResetOtp = async (req, res) => {
+    try {
+        const {email, otp, password, confirmPassword} = req.body;
+        const result = await authService.verifyResetOtp({email, otp, password, confirmPassword});
+        return response.ok(res, result, 'Password reset successful', 200);
+    } catch (error) {
+        return response.error(res, error.message, 400);
+    }
+}
+
+module.exports = { register, login, logout, verifyOtp, resetPassword, verifyResetOtp };
