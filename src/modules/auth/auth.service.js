@@ -1,6 +1,8 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const authRepository = require('./auth.repository.js');
+const { sendOTP } = require('../../shared/utils/mailer');
+const { generateOTP, saveOTP, verifyOTP } = require('../../shared/utils/otp');
 
 const register = async ({name, email, password, confirmPassword}) => {
     const existingUser = await authRepository.findUserByEmail(email);
@@ -15,9 +17,22 @@ const register = async ({name, email, password, confirmPassword}) => {
     // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    //Create a new user
-    const newUser = await authRepository.createUser({name, email, password: hashedPassword});
+    // Generate OTP and save to Redis
+    const otp = generateOTP();
+    saveOTP(email, { otp, name, hashedPassword });
+    await sendOTP(email, otp);
 
+    return {email}; // trả về email để client biết gửi OTP đến đâu, không trả về userId ngay
+};
+
+const verifyOtp = async ({email, otp}) => {
+    const record = verifyOTP(email, otp);
+    if(!record) {
+        throw new Error('Invalid or expired OTP');
+    }
+
+    // Create user after OTP is verified
+    const newUser = await authRepository.createUser({name: record.name, email, password: record.hashedPassword}); 
     return newUser;
 };
 
@@ -36,4 +51,4 @@ const login = async ({email, password}) => {
     return {token, user: { id: user.id, name: user.name, email: user.email }};
 }
 
-module.exports = { register, login };
+module.exports = { register, login, verifyOtp };

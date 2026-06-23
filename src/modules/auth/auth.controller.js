@@ -11,6 +11,16 @@ const register = async (req, res) => {
     }
 }
 
+const verifyOtp = async (req, res) => {
+    try {
+        const {email, otp, name, password} = req.body;
+        const newUser = await authService.verifyOtp({email, otp, name, password});
+        return response.ok(res, {userId: newUser}, 'User registered successfully', 201);
+    } catch (error) {
+        return response.error(res, error.message, 400);
+    }
+}
+
 const login = async (req, res) => {
     try {
         const {email, password} = req.body;
@@ -32,4 +42,4 @@ const logout = async (req, res) => {
     return response.ok(res, null, 'Logout successful', 200);
 }
 
-module.exports = { register, login, logout };
+module.exports = { register, login, logout, verifyOtp };
