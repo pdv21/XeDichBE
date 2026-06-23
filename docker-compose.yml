@@ -14,7 +14,7 @@ services:
       MYSQL_USER: xedich_user
       MYSQL_PASSWORD: xedich_password
     ports:
-      - "3306:3306"
+      - "3636:3306"
     volumes:
       - mysql_data:/var/lib/mysql        # lưu data không mất khi restart
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql  # chạy SQL khi khởi tạo lần đầu
