@@ -16,8 +16,8 @@ const searchHotelsWithPrice = async ({ city, checkIn, checkOut, budget }) => {
             name:        h.name || null,
             city:        city,
             address:     h.address || null,
-            lat:         h.location?.lat || null,
-            lng:         h.location?.lon || null,
+            lat:         h.geo?.latitude || null,
+            lng:         h.geo?.longitude  || null,
             star_rating: h.review_summary?.rating || null,
             thumbnail:   h.thumbnail || null,
             description: h.mentions?.join(', ') || null

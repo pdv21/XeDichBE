@@ -10,19 +10,23 @@ const findByCity = async (city) => {
 
 const upsetHotel = async (hotel) => {
     const [result] = await db.execute(
-        `INSERT INTO hotels (hotel_key, name, city, star_rating, address, description)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO hotels (hotel_key, name, city, star_rating, address, lat, lng, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
          name = VALUES(name),
          city = VALUES(city),
          star_rating = VALUES(star_rating),
          address = VALUES(address),
+         lat = VALUES(lat),
+         lng = VALUES(lng),
          description = VALUES(description)`,
         [hotel.hotel_key ?? null,
-         hotel.name ?? null, 
-         hotel.city ?? null, 
+         hotel.name ?? null,
+         hotel.city ?? null,
          hotel.star_rating ?? null,
-         hotel.address ?? null, 
+         hotel.address ?? null,
+         hotel.lat ?? null,
+         hotel.lng ?? null,
          hotel.description ?? null]
     );
     return result.affectedRows > 0;
