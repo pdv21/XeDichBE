@@ -1,30 +1,59 @@
-const axios        = require('axios');
-const LOCATION_KEYS = require('../../shared/config/location_key');
+const axios = require('axios');
+const locationRepository = require('../location/location.repository');
 
 const BASE_URL = 'https://data.xotelo.com/api';
 
-const searchHotels = async (city) => {
-    // Đổi tên thành phố sang location_key
-    const locationKey = LOCATION_KEYS[city];
+const searchHotels = async (cityCode, { limit, minRating } = {}) => {
+    // ✅ Lấy location_key từ DB thay vì dùng dict tĩnh
+    const locationKey = await locationRepository.getLocationKey(cityCode);
     if (!locationKey) {
-        throw new Error(`Thành phố "${city}" chưa được hỗ trợ`);
+        throw new Error(`Thành phố "${cityCode}" chưa được hỗ trợ`);
     }
 
-    const res = await axios.get(`${BASE_URL}/list`, {
-        params: {
-            location_key: locationKey,  // ← đổi từ location sang location_key
-            limit: 20,
+    const PAGE_SIZE = 20;
+    let offset = 0;
+    let allHotels = [];
+    let totalCount = null;
+
+    do {
+        const res = await axios.get(`${BASE_URL}/list`, {
+            params: {
+                location_key: locationKey,
+                limit: PAGE_SIZE,
+                offset: offset,
+            }
+        });
+
+        if (!res.data || !res.data.result) {
+            throw new Error('Xotelo API không trả về dữ liệu');
         }
-    });
 
-    console.log('Xotelo response:', JSON.stringify(res.data, null, 2));
+        const result = res.data.result;
 
-    if (!res.data || !res.data.result) {
-        throw new Error('Xotelo API không trả về dữ liệu');
-    }
+        if (totalCount === null) {
+            totalCount = result.total_count || 0;
+        }
 
-    // Xotelo trả về result.list thay vì result trực tiếp
-    return res.data.result.list || [];
+        const list = result.list || [];
+        if (list.length === 0) break;
+
+        // Lọc theo min_rating nếu có
+        const filtered = minRating
+            ? list.filter(h => (h.review_summary?.rating ?? 0) >= minRating)
+            : list;
+
+        allHotels = allHotels.concat(filtered);
+        offset += PAGE_SIZE;
+
+        console.log(`Đã lấy ${allHotels.length} khách sạn (offset: ${offset}/${totalCount})`);
+
+        // Dừng sớm nếu đã đủ số lượng cần
+        if (limit && allHotels.length >= limit) break;
+
+    } while (offset < totalCount);
+
+    // Cắt đúng số lượng nếu có limit
+    return limit ? allHotels.slice(0, limit) : allHotels;
 };
 
 const getHotelRates = async (hotelKey, checkIn, checkOut) => {
