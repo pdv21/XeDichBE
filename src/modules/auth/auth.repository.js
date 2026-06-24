@@ -16,4 +16,12 @@ const createUser = async ({name, email, password}) => {
     return result.insertId;
 }
 
-module.exports = { findUserByEmail, createUser };
+const updateUserPassword = async (email, newPassword) => {
+    const [result] = await db.execute(
+        'UPDATE users SET password = ? WHERE email = ?',
+        [newPassword, email]
+    );
+    return result.affectedRows > 0;
+};
+
+module.exports = { findUserByEmail, createUser, updateUserPassword };
