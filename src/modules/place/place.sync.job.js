@@ -1,6 +1,11 @@
 const cron = require("node-cron");
 const placeRepository = require("./place.repository");
 const locationRepository = require("../location/location.repository");
+// OpenTripMap trả preview.source thường là link thumbnail Wikimedia width mặc định
+// 400px — KHÔNG nằm trong danh sách width chuẩn Wikimedia CDN chấp nhận (xem comment
+// đầy đủ ở place.enrich.job.js), nên phải chuẩn hoá ngay lúc crawl, tránh lưu lại
+// URL vỡ ảnh y như bug đã gặp với nguồn Wikipedia.
+const { normalizeWikimediaThumbWidth } = require("./place.enrich.job");
 
 // Crawl địa điểm từ OpenTripMap — dữ liệu ít đổi nên 1 lần/tuần là đủ.
 // Chạy 0h THỨ 3 (lệch 1 ngày với hotel sync 0h thứ 2) để 2 job nặng không
@@ -62,7 +67,9 @@ const toRow = (item, location, category, detail = null) => ({
   longitude: item.point?.lon ?? null,
   rate: parseRate(item.rate),
   description: detail?.wikipedia_extracts?.text?.slice(0, 5000) ?? null,
-  image: detail?.preview?.source?.slice(0, 500) ?? null,
+  image: detail?.preview?.source
+    ? normalizeWikimediaThumbWidth(detail.preview.source).slice(0, 500)
+    : null,
   wikipedia: detail?.wikipedia?.slice(0, 500) ?? null,
   visit_minutes: estimateVisitMinutes(category, item.kinds || ""),
 });

@@ -96,6 +96,27 @@ const normalizeWikimediaThumbWidth = (url) => {
   return `${m[1]}${standard}${m[3]}`;
 };
 
+// ─── Bước 0: sửa lại ảnh đã lưu sai width (không gọi API ngoài, chạy trước) ───
+// Bug đã tồn tại: normalizeWikimediaThumbWidth chỉ áp dụng khi GHI ảnh mới (điểm
+// đang thiếu ảnh) — không tự sửa các URL "NNpx-..." đã lưu từ trước với width không
+// chuẩn (vd .../400px-*.jpg, phổ biến vì đó là width mặc định của OpenTripMap
+// preview). Wikimedia đổi hạ tầng nên các URL này giờ trả 400, ảnh vỡ trên FE dù
+// dữ liệu "có vẻ" hợp lệ. Bước này quét lại toàn bộ và sửa tại chỗ — thuần string,
+// không tốn quota, chạy lại thoải mái mỗi lần enrich.
+const repairImageWidths = async () => {
+  const rows = await placeRepository.findImagesNeedingWidthCheck();
+  let fixed = 0;
+  for (const row of rows) {
+    const normalized = normalizeWikimediaThumbWidth(row.image);
+    if (normalized !== row.image) {
+      await placeRepository.setImage(row.id, normalized);
+      fixed++;
+    }
+  }
+  console.log(`[PlaceEnrich] Repair width ảnh: sửa ${fixed}/${rows.length} URL không chuẩn`);
+  return fixed;
+};
+
 // ─── Bước 1: Wikipedia ────────────────────────────────────────────────────────
 const enrichFromWikipedia = async () => {
   const places = await placeRepository.findNeedingWikiEnrich();
@@ -213,10 +234,14 @@ const enrichFromGemini = async () => {
 // ─── enrichAllPlaces — gọi sau syncAllCities hoặc trigger thủ công ────────────
 const enrichAllPlaces = async () => {
   console.log(`[PlaceEnrich] Bắt đầu enrich lúc ${new Date().toISOString()}`);
+  const repaired = await repairImageWidths();
   const wiki = await enrichFromWikipedia();
   const gemini = await enrichFromGemini();
-  console.log(`[PlaceEnrich] Hoàn thành — Wikipedia: ${wiki}, Gemini: ${gemini}`);
-  return { wiki, gemini };
+  console.log(`[PlaceEnrich] Hoàn thành — Repair: ${repaired}, Wikipedia: ${wiki}, Gemini: ${gemini}`);
+  return { repaired, wiki, gemini };
 };
 
-module.exports = { enrichAllPlaces, enrichFromWikipedia, enrichFromGemini, normalizeWikimediaThumbWidth };
+module.exports = {
+  enrichAllPlaces, enrichFromWikipedia, enrichFromGemini, repairImageWidths,
+  normalizeWikimediaThumbWidth,
+};

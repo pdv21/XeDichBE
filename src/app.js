@@ -2,6 +2,7 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const morgan = require('morgan');
 const app = express();
 
 // Render (và hầu hết PaaS) đặt app sau 1 lớp reverse proxy → có header
@@ -28,6 +29,11 @@ app.use(cors({
 }));
 app.use(cookieParser());
 app.use(express.json());
+
+// Ghi log mọi request API — method, path, status, thời gian xử lý, IP client
+// (đã có trust proxy nên :remote-addr là IP thật, không phải IP của Render).
+// Render tự bắt stdout vào tab Logs, không cần ghi ra file.
+app.use(morgan('[HTTP] :method :url :status :response-time ms - :remote-addr'));
 
 app.use('/auth', authRoutes);
 app.use('/flights', flightRoutes);
