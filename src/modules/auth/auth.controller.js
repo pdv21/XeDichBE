@@ -31,16 +31,21 @@ const verifyOtp = async (req, res) => {
     }
 }
 
+// FE (Vercel) và BE (Render) là 2 domain khác nhau hoàn toàn ở production → cookie phải
+// sameSite:'None' (bắt buộc đi kèm secure:true) mới được trình duyệt gửi cross-site.
+// Dev local FE/BE cùng site (localhost, khác port) nên vẫn dùng 'Strict' như cũ.
+const cookieOptions = () => ({
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 7*24*60*60*1000, // 7 days
+    sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Strict',
+});
+
 const login = async (req, res) => {
     try {
         const {email, password} = req.body;
         const { token, user } = await authService.login({email, password});
-        res.cookie('token', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production' ,
-            maxAge: 7*24*60*60*1000, // 7 days,
-            sameSite: 'Strict'
-        });
+        res.cookie('token', token, cookieOptions());
         return response.ok(res, { user }, 'Login successful', 200);
     } catch (error) {
         return handleAuthError(res, error);
@@ -48,7 +53,10 @@ const login = async (req, res) => {
 }
 
 const logout = async (req, res) => {
-    res.clearCookie('token');
+    // clearCookie phải truyền lại đúng options (trừ maxAge) đã dùng lúc set,
+    // không thì trình duyệt coi là cookie khác và không xoá được
+    const { maxAge, ...opts } = cookieOptions();
+    res.clearCookie('token', opts);
     return response.ok(res, null, 'Logout successful', 200);
 }
 
