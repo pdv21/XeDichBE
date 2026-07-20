@@ -24,6 +24,13 @@ const sendOTP = async (email, otp) => {
             <p>Nếu bạn không yêu cầu mã này, hãy bỏ qua email này.</p>
         `
     });
+    // SDK Resend KHÔNG tự throw khi API lỗi (vd key sai, domain chưa verify) —
+    // chỉ trả { data: null, error: {...} }. Không check thì service cứ tưởng
+    // gửi thành công, trả 200 "OTP đã được gửi" dù thực tế chưa gửi được gì.
+    if (result.error) {
+        console.error('[Mailer] Resend lỗi:', JSON.stringify(result.error));
+        throw Object.assign(new Error('Gửi email thất bại, vui lòng thử lại sau'), { statusCode: 500 });
+    }
     console.log('Resend result:', JSON.stringify(result));
 };
 
