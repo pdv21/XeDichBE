@@ -8,8 +8,7 @@
     "dev": "nodemon src/server.js",
     "test": "jest --coverage",
     "lint": "eslint src/",
-    "format": "prettier --write src/",
-    "sync:hotels": "node sync_hotel.js"
+    "format": "prettier --write src/"
   },
   "dependencies": {
     "amadeus": "^10.0.0",

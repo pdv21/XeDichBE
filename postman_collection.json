@@ -1,0 +1,264 @@
+{
+  "info": {
+    "name": "XeDich Backend API",
+    "description": "API backend XeDich — chạy `docker compose up -d` trước khi test. Base URL: http://localhost:5000.\n\nLuồng auth: Register → lấy OTP (xem email, hoặc chạy `docker exec xedich_redis redis-cli get \"otp:<email>\"`) → Verify OTP → Login. Login set cookie httpOnly `token`, Postman tự lưu cookie nên các request sau tự được xác thực.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5000" },
+    { "key": "email", "value": "tester@example.com" },
+    { "key": "password", "value": "Test1234" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "1. Register (gửi OTP)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/register",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Nguyen Van Test\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"confirmPassword\": \"{{password}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "2. Verify Register OTP (tạo user)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/verify-register-otp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"otp\": \"DIEN_OTP_6_SO_VAO_DAY\"\n}"
+            }
+          }
+        },
+        {
+          "name": "3. Login (set cookie token)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": { "method": "POST", "url": "{{baseUrl}}/auth/logout" }
+        },
+        {
+          "name": "Reset Password (gửi OTP)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/reset-password",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\"\n}" }
+          }
+        },
+        {
+          "name": "Verify Reset OTP (đổi mật khẩu)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/verify-reset-otp",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"otp\": \"DIEN_OTP\",\n  \"password\": \"MatKhauMoi123\",\n  \"confirmPassword\": \"MatKhauMoi123\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users (cần login)",
+      "item": [
+        {
+          "name": "Danh sách users",
+          "request": { "method": "GET", "url": "{{baseUrl}}/users" }
+        },
+        {
+          "name": "Tìm user theo tên",
+          "request": { "method": "GET", "url": "{{baseUrl}}/users/search?name=Test" }
+        },
+        {
+          "name": "Chi tiết user",
+          "request": { "method": "GET", "url": "{{baseUrl}}/users/1" }
+        },
+        {
+          "name": "Sửa hồ sơ (chỉ của chính mình)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/users/1",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Ten Moi\"\n}" }
+          }
+        },
+        {
+          "name": "Xem sở thích du lịch",
+          "request": { "method": "GET", "url": "{{baseUrl}}/users/me/preferences" }
+        },
+        {
+          "name": "Cập nhật sở thích",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/users/me/preferences",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"interests\": [\"food\", \"beach\", \"culture\"],\n  \"pace\": \"moderate\",\n  \"w_price\": 0.35,\n  \"w_rating\": 0.25,\n  \"w_distance\": 0.25,\n  \"w_preference\": 0.15\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Hotels (LiteAPI)",
+      "item": [
+        {
+          "name": "Tìm khách sạn theo thành phố (đọc DB, nhanh)",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/hotels/search-by-city?countryCode=VN&cityName=Da Nang&limit=10&offset=0"
+          }
+        },
+        {
+          "name": "Tìm theo danh sách id",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/hotels/search-by-ids?ids=lp65555753,lp74a5e"
+          }
+        },
+        {
+          "name": "Chi tiết khách sạn",
+          "request": { "method": "GET", "url": "{{baseUrl}}/hotels/lp65555753" }
+        },
+        {
+          "name": "Giá phòng (live LiteAPI — lần đầu ~10s, có cache 5 phút)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/hotels/rates",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cityName\": \"Da Nang\",\n  \"countryCode\": \"VN\",\n  \"checkin\": \"2026-09-10\",\n  \"checkout\": \"2026-09-12\",\n  \"occupancies\": [{ \"adults\": 2 }],\n  \"currency\": \"VND\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Places (OpenTripMap)",
+      "item": [
+        {
+          "name": "Điểm tham quan nổi tiếng",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/places?city_code=da-nang&category=attraction&min_rate=2&limit=10"
+          }
+        },
+        {
+          "name": "Quán ăn / cafe",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/places?city_code=hoi-an&category=food&limit=10"
+          }
+        },
+        {
+          "name": "Tất cả địa điểm 1 thành phố",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/places?city_code=ha-noi&limit=20&offset=0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Trips (cần login)",
+      "item": [
+        {
+          "name": "Tạo chuyến đi",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/trips",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"city_code\": \"da-nang\",\n  \"title\": \"Du lịch Đà Nẵng 3N2Đ\",\n  \"start_date\": \"2026-09-10\",\n  \"end_date\": \"2026-09-13\",\n  \"budget_total\": 15000000,\n  \"num_people\": 2\n}"
+            }
+          }
+        },
+        {
+          "name": "Danh sách chuyến đi của tôi",
+          "request": { "method": "GET", "url": "{{baseUrl}}/trips?page=1&page_size=10" }
+        },
+        {
+          "name": "Chi tiết chuyến đi",
+          "request": { "method": "GET", "url": "{{baseUrl}}/trips/1" }
+        },
+        {
+          "name": "Sửa chuyến đi (chỉ khi status=draft)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/trips/1",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Đổi tên chuyến đi\",\n  \"budget_total\": 18000000\n}"
+            }
+          }
+        },
+        {
+          "name": "Xoá chuyến đi",
+          "request": { "method": "DELETE", "url": "{{baseUrl}}/trips/1" }
+        },
+        {
+          "name": "Sinh lịch trình (BẤT ĐỒNG BỘ — trả 202 + job_id)",
+          "request": {
+            "method": "POST",
+            "url": "{{baseUrl}}/trips/1/plan",
+            "description": "Đẩy job sinh lịch trình vào queue, trả ngay 202 {job_id}. Pipeline BUDGET-AWARE: lấy giá khách sạn thật → chọn khách sạn vừa ngân sách (chừa 15% dự phòng) + tự hạ pace nếu cần → scoring theo preferences → gom cụm theo ngày → sắp thứ tự di chuyển → xếp giờ + bữa ăn → AI (Gemini) viết tóm tắt + tips. Kết quả itinerary kèm budget_summary (chi phí đã tối ưu + warnings). Polling GET /jobs/{job_id} đến khi completed rồi gọi GET /trips/:id/itinerary. Bấm lại khi job đang chạy sẽ trả lại job cũ (không tạo trùng)."
+          }
+        },
+        {
+          "name": "Polling trạng thái job",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/jobs/1",
+            "description": "job_id lấy từ response của POST /trips/:id/plan. status: queued → processing → completed/failed."
+          }
+        },
+        {
+          "name": "Xem lịch trình đã sinh (kèm ai_summary)",
+          "request": { "method": "GET", "url": "{{baseUrl}}/trips/1/itinerary" }
+        },
+        {
+          "name": "Ước tính ngân sách chuyến đi",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/trips/1/budget?origin=HAN",
+            "description": "Ước tính chi phí bằng VND: khách sạn (giá VND thật từ LiteAPI, 3 mức budget/standard/premium), vé bay khứ hồi (Ignav trả USD, tự quy đổi theo USD_VND_RATE — cần ?origin=<mã sân bay đi>, bỏ qua nếu không cần), ăn uống, vé tham quan, di chuyển nội thành. budget_total của trip hiểu là VND. So sánh → within_budget + difference. Lần đầu ~10-15s (gọi live), các lần sau nhanh nhờ cache."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Flights (Ignav)",
+      "item": [
+        {
+          "name": "Tìm chuyến bay một chiều",
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/flights?origin=HAN&destination=SGN&departure_date=2026-09-10&adults=1"
+          }
+        }
+      ]
+    }
+  ]
+}
