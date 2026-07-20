@@ -107,6 +107,22 @@ const updateEnrichment = async (id, { nameVi, descriptionVi, image }) => {
   );
 };
 
+// Tất cả điểm đang có ảnh dạng thumbnail Wikimedia "NNpx-..." — dùng để rà soát/sửa
+// lại width không chuẩn (xem normalizeWikimediaThumbWidth trong place.enrich.job.js).
+// Không lọc is_active vì ảnh cũ có thể còn ở bản ghi đã bị dedupe soft-delete.
+const findImagesNeedingWidthCheck = async () => {
+  const [rows] = await db.execute(
+    `SELECT id, image FROM places WHERE image LIKE '%px-%'`
+  );
+  return rows;
+};
+
+// Ghi đè trực tiếp (không COALESCE) — dùng để sửa lại URL ảnh đã lưu sai, khác với
+// updateEnrichment vốn chỉ bổ sung dữ liệu còn thiếu
+const setImage = async (id, image) => {
+  await db.execute(`UPDATE places SET image = ? WHERE id = ?`, [image, id]);
+};
+
 // Dùng chung bởi findByLocation + countByLocation để 2 query luôn khớp điều kiện lọc
 const buildLocationConditions = ({ locationId, category, minRate }) => {
   const conditions = ["location_id = ?", "is_active = 1"];
@@ -148,4 +164,5 @@ const countByLocation = async ({ locationId, category, minRate }) => {
 module.exports = {
   fetchRadius, fetchDetail, bulkUpsertPlaces, findByLocation, countByLocation,
   findNeedingWikiEnrich, findNeedingTranslation, updateEnrichment,
+  findImagesNeedingWidthCheck, setImage,
 };
