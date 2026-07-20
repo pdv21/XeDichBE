@@ -1,13 +1,23 @@
 const response = require('../../shared/utils/response');
 const authService = require('./auth.service');
 
+// Chỉ lộ error.message ra ngoài khi service đã gán statusCode (lỗi nghiệp vụ đã biết);
+// mọi lỗi bất ngờ khác (DB, mailer,...) trả về message chung với status 500.
+const handleAuthError = (res, error) => {
+    if (error.statusCode) {
+        return response.error(res, error.message, error.statusCode);
+    }
+    console.error('[AuthController]', error);
+    return response.error(res, 'Đã có lỗi xảy ra, vui lòng thử lại sau', 500);
+};
+
 const register = async (req, res) => {
     try {
         const {name, email, password, confirmPassword} = req.body;
-        const newUser = await authService.register({name, email, password, confirmPassword});
-        return response.ok(res, {userId: newUser}, 'User registered successfully', 201);
+        const result = await authService.register({name, email, password, confirmPassword});
+        return response.ok(res, result, 'OTP đã được gửi, vui lòng kiểm tra email để hoàn tất đăng ký', 200);
     } catch (error) {
-        return response.error(res, error.message, 400);
+        return handleAuthError(res, error);
     }
 }
 
@@ -17,23 +27,23 @@ const verifyOtp = async (req, res) => {
         const newUser = await authService.verifyOtp({email, otp});
         return response.ok(res, {userId: newUser}, 'User registered successfully', 201);
     } catch (error) {
-        return response.error(res, error.message, 400);
+        return handleAuthError(res, error);
     }
 }
 
 const login = async (req, res) => {
     try {
         const {email, password} = req.body;
-        const result = await authService.login({email, password});
-        res.cookie('token', result.token, { 
-            httpOnly: true, 
+        const { token, user } = await authService.login({email, password});
+        res.cookie('token', token, {
+            httpOnly: true,
             secure: process.env.NODE_ENV === 'production' ,
             maxAge: 7*24*60*60*1000, // 7 days,
             sameSite: 'Strict'
         });
-        return response.ok(res, result, 'Login successful', 200);
+        return response.ok(res, { user }, 'Login successful', 200);
     } catch (error) {
-        return response.error(res, error.message, 400);
+        return handleAuthError(res, error);
     }
 }
 
@@ -48,8 +58,8 @@ const resetPassword = async (req, res) => {
         const result = await authService.resetPassword({email});
         return response.ok(res, result, 'OTP sent successfully', 200);
     } catch (error) {
-        return response.error(res, error.message, 400);
-    }   
+        return handleAuthError(res, error);
+    }
 }
 
 const verifyResetOtp = async (req, res) => {
@@ -58,7 +68,7 @@ const verifyResetOtp = async (req, res) => {
         const result = await authService.verifyResetOtp({email, otp, password, confirmPassword});
         return response.ok(res, result, 'Password reset successful', 200);
     } catch (error) {
-        return response.error(res, error.message, 400);
+        return handleAuthError(res, error);
     }
 }
 

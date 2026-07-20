@@ -1,38 +1,28 @@
-const axios = require("axios");
 const express = require("express");
 const router = express.Router();
 const response = require("../../shared/utils/response");
+const flightService = require("./flight.service");
 
-const searchFlights = async () => {
-    const response = await axios.post(
-        "https://ignav.com/api/fares/one-way",
-        {
-            origin: "HAN",
-            destination: "SGN",
-            departure_date: "2026-07-01",
-            adults: 1
-        },
-        {
-            headers: {
-                "X-Api-Key": process.env.IGNAV_API_KEY,
-                "Content-Type": "application/json"
-            }
-        }
-    );
+router.get("/", async (req, res) => {
+    const { origin, destination, departure_date, adults } = req.query;
 
-    return response.data;
-};
+    if (!origin || !destination || !departure_date) {
+        return response.error(res, "Missing required query parameters: origin, destination, departure_date", 400);
+    }
 
-router.get("/flights", async (req, res) => {
     try {
-        const data = await searchFlights();
+        const data = await flightService.searchOneWay({
+            origin,
+            destination,
+            departureDate: departure_date,
+            adults: adults ? parseInt(adults, 10) : 1,
+        });
 
         response.ok(res, data, "Flights retrieved successfully", 200);
     } catch (error) {
-    console.error(error);
-
-    response.error(res, 500, error.message, error.response?.data);
-}
+        console.error(error);
+        response.error(res, error.message, 500, error.response?.data);
+    }
 });
 
 module.exports = router;

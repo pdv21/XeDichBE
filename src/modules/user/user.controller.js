@@ -42,8 +42,13 @@ const getUserById = async (req, res) => {
 const updateUser = async (req, res) => {
     try {
         const { id } = req.params;
+
+        if (String(req.user.id) !== String(id)) {
+            return errorResponse(res, 'Bạn không có quyền cập nhật người dùng này', 403);
+        }
+
         const { name, email } = req.body;
-        
+
         // Only allow updating name and email
         const updateData = {};
         if (name !== undefined) updateData.name = name;
@@ -60,9 +65,40 @@ const updateUser = async (req, res) => {
     }
 };
 
+const getMyPreferences = async (req, res) => {
+    try {
+        const prefs = await userService.getPreferences(req.user.id);
+        return ok(res, prefs, 'Lấy sở thích du lịch thành công');
+    } catch (error) {
+        if (error.statusCode) {
+            return errorResponse(res, error.message, error.statusCode);
+        }
+        console.error('Error in getMyPreferences:', error);
+        return errorResponse(res, 'Đã có lỗi xảy ra khi lấy sở thích', 500);
+    }
+};
+
+const updateMyPreferences = async (req, res) => {
+    try {
+        const { interests, pace, w_price, w_rating, w_distance, w_preference } = req.body;
+        const prefs = await userService.updatePreferences(req.user.id, {
+            interests, pace, w_price, w_rating, w_distance, w_preference
+        });
+        return ok(res, prefs, 'Cập nhật sở thích du lịch thành công');
+    } catch (error) {
+        if (error.statusCode) {
+            return errorResponse(res, error.message, error.statusCode);
+        }
+        console.error('Error in updateMyPreferences:', error);
+        return errorResponse(res, 'Đã có lỗi xảy ra khi cập nhật sở thích', 500);
+    }
+};
+
 module.exports = {
     getAllUsers,
     searchUsers,
     getUserById,
-    updateUser
+    updateUser,
+    getMyPreferences,
+    updateMyPreferences
 };
