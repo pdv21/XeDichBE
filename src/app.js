@@ -3,6 +3,14 @@ const helmet = require('helmet');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const app = express();
+
+// Render (và hầu hết PaaS) đặt app sau 1 lớp reverse proxy → có header
+// X-Forwarded-For. Không khai báo trust proxy thì express-rate-limit throw
+// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR (chống giả mạo IP) làm crash route có
+// rate limit (auth). Tin đúng 1 hop (proxy của Render), không dùng `true`
+// (tin mọi hop) vì client có thể tự set X-Forwarded-For để né rate limit.
+app.set('trust proxy', 1);
+
 const authRoutes = require('./modules/auth/auth.route');
 const hotelRoutes = require('./modules/hotel_liteapi/hotel.route');
 const flightRoutes = require('./modules/flight/test');
