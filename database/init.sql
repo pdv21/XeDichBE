@@ -4,8 +4,8 @@ SET time_zone = '+07:00';
 -- XeDich Database Schema
 -- ========================
 
-CREATE DATABASE IF NOT EXISTS xedich_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE xedich_db;
+-- CREATE DATABASE IF NOT EXISTS xedich_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+-- USE xedich_db;
 
 -- Bảng users
 CREATE TABLE IF NOT EXISTS users (
@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS users (
   provider    ENUM('local', 'google') DEFAULT 'local',
   created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Danh sách thành phố được hỗ trợ tìm khách sạn (LiteAPI cần đúng cityName này).
 -- latitude/longitude là toạ độ trung tâm thành phố — dùng làm tâm bán kính crawl
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS locations (
   is_active      TINYINT(1)   DEFAULT 1,
   created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ========================================================
 -- Cache dữ liệu TĨNH khách sạn từ LiteAPI (tên, địa chỉ, ảnh, mô tả ngắn,...).
@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS hotels (
     FOREIGN KEY (location_id)
     REFERENCES locations(id)
     ON DELETE RESTRICT
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE INDEX idx_hotels_location_rating ON hotels(location_id, star_rating);
 
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS places (
 
   CONSTRAINT fk_places_location
     FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE RESTRICT
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE INDEX idx_places_location_category_rate ON places(location_id, category, rate);
 
@@ -159,7 +159,7 @@ CREATE TABLE IF NOT EXISTS trips (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   CONSTRAINT fk_trips_location
     FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE RESTRICT
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE INDEX idx_trips_user_status ON trips(user_id, status);
 
@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
 
   CONSTRAINT fk_jobs_trip FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
   CONSTRAINT fk_jobs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Lịch trình đã sinh cho trip — output của Travel Planning Engine.
 -- Mỗi row = 1 hoạt động trong 1 ngày (điểm tham quan hoặc bữa ăn),
@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS trip_activities (
     FOREIGN KEY (trip_id) REFERENCES trips(id) ON DELETE CASCADE,
   CONSTRAINT fk_activities_place
     FOREIGN KEY (place_id) REFERENCES places(id) ON DELETE RESTRICT
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Sở thích du lịch — 1 dòng/user, dùng cho bước Filtering & Scoring.
 -- 4 trọng số w_* phải cộng lại = 1.0 (mặc định 0.35/0.25/0.25/0.15 theo
@@ -219,4 +219,4 @@ CREATE TABLE IF NOT EXISTS user_preferences (
 
   CONSTRAINT fk_prefs_user
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
