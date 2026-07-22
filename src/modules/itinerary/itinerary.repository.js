@@ -39,7 +39,7 @@ const findByTripId = async (tripId) => {
     `SELECT ta.day_index, ta.order_index, ta.start_time, ta.activity_type, ta.score,
             p.id AS place_id, p.name, p.name_vi, p.category, p.kinds, p.address,
             p.latitude, p.longitude, p.rate, p.description, p.description_vi,
-            p.image, p.visit_minutes
+            p.image, p.visit_minutes, p.avg_cost
      FROM trip_activities ta
      JOIN places p ON ta.place_id = p.id
      WHERE ta.trip_id = ?

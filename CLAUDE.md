@@ -53,9 +53,12 @@ Trigger crawl thủ công (không cần đợi cron hằng tuần), chạy trong
 docker exec xedich_backend node -e "require('./src/modules/hotel_liteapi/hotel.sync.job').syncAllCities().then(()=>process.exit(0))"
 # Địa điểm tham quan/ăn uống (cron thật: 0h thứ 3; mất ~2-3 phút do giãn cách call detail)
 docker exec xedich_backend node -e "require('./src/modules/place/place.sync.job').syncAllCities().then(()=>process.exit(0))"
-# Việt hoá + bù ảnh places (tự chạy cuối sync, nhưng trigger riêng được; idempotent;
-# lần đầu mất ~10-20 phút do giãn cách Wikipedia + rate limit Gemini free tier)
+# Việt hoá + bù ảnh + ước tính chi phí places (tự chạy cuối sync, nhưng trigger riêng được;
+# idempotent; lần đầu mất khá lâu do giãn cách Wikipedia + rate limit Gemini free tier
+# (dịch + ước tính chi phí đều qua Gemini, batch riêng — xem place.enrich.job.js)
 docker exec xedich_backend node -e "require('./src/modules/place/place.enrich.job').enrichAllPlaces().then(()=>process.exit(0))"
+# Chỉ ước tính chi phí (không dịch lại) — dùng khi cần điền avg_cost gấp cho budget module
+docker exec xedich_backend node -e "require('./src/modules/place/place.enrich.job').enrichCostsFromGemini().then(()=>process.exit(0))"
 # Lọc địa điểm trùng (tự chạy cuối sync sau enrich; idempotent; soft-delete is_active=0)
 docker exec xedich_backend node -e "require('./src/modules/place/place.dedupe.job').dedupeAllPlaces().then(()=>process.exit(0))"
 ```
@@ -99,12 +102,25 @@ src/
 │   │                           # 1. GET /trips/:id/budget?origin=HAN (on-demand, có vé bay Ignav)
 │   │                           # 2. fitBudgetForPlanning + buildPlanBudgetSummary — được itinerary
 │   │                           #    gọi TRONG pipeline sinh lịch trình (budget-aware planning):
-│   │                           #    lấy giá khách sạn thật → trừ chi phí cố định theo pace →
-│   │                           #    chọn khách sạn đắt nhất còn ≤85% ngân sách còn lại (chừa dự
-│   │                           #    phòng) → nếu không đủ thì HẠ PACE dần (packed→moderate→relaxed)
-│   │                           #    → vẫn thiếu thì cảnh báo trong warnings[]. Kết quả lưu
+│   │                           #    với mỗi pace ứng viên, SINH THẬT lịch trình (generateItinerary,
+│   │                           #    thuật toán thuần nên gọi lặp lại rẻ) rồi tính ăn/vé/di chuyển từ
+│   │                           #    ĐÚNG route+quán+điểm vừa sinh (không còn ước lượng qua số lượng)
+│   │                           #    → lấy giá khách sạn thật → trừ chi phí cố định vừa tính → chọn
+│   │                           #    khách sạn đắt nhất còn ≤85% ngân sách còn lại (chừa dự phòng)
+│   │                           #    → nếu không đủ thì HẠ PACE dần (packed→moderate→relaxed) và THỬ
+│   │                           #    LẠI TOÀN BỘ → vẫn thiếu thì cảnh báo trong warnings[]. Lịch trình
+│   │                           #    được chọn trả kèm trong fit.activities — itinerary.service.js
+│   │                           #    dùng thẳng để lưu, không sinh lại lần 2. Kết quả lưu
 │   │                           #    trips.budget_summary (đọc kèm GET /trips/:id/itinerary).
-│   │                           # Khách sạn ở ghép 2 người/phòng; đơn giá ước tính env BUDGET_*_VND.
+│   │                           # Vé tham quan + ăn uống (trưa/tối) dùng avg_cost THẬT của từng điểm/
+│   │                           #    quán đã chọn (enrich bởi place.enrich.job.js#enrichCostsFromGemini,
+│   │                           #    xem mục place/ bên dưới); di chuyển tính theo tổng khoảng cách
+│   │                           #    Haversine thật giữa các điểm trong ngày × hệ số đường bộ × cước
+│   │                           #    xe máy/ô tô theo num_people (BUDGET_TRANSPORT_*_VND). Các hằng số
+│   │                           #    BUDGET_MEAL_COST_VND/BUDGET_ATTRACTION_FEE_VND chỉ còn là fallback
+│   │                           #    khi avg_cost chưa enrich, bữa sáng (không gắn quán cụ thể), hoặc
+│   │                           #    GET /trips/:id/budget gọi trước khi có lịch trình.
+│   │                           # Khách sạn ở ghép 2 người/phòng.
 │   ├── location/              # location.repository.js — bảng `locations`. KHÔNG có route,
 │   │                           # dùng nội bộ bởi hotel_liteapi, place, trip
 │   ├── place/                 # Địa điểm tham quan/ăn uống — OpenTripMap
@@ -113,12 +129,16 @@ src/
 │   │   ├── place.sync.job.js      # Cron 0h THỨ 3 hằng tuần (lệch hotel sync thứ 2); dedupe theo
 │   │   │                           # tên, chỉ gọi detail cho điểm rate>=2 (tiết kiệm quota 5k/ngày);
 │   │   │                           # cuối syncAllCities gọi enrich job (best-effort)
-│   │   ├── place.enrich.job.js    # Việt hoá + bù ảnh (idempotent, chạy lại thoải mái):
+│   │   ├── place.enrich.job.js    # Việt hoá + bù ảnh + ước tính chi phí (idempotent, chạy lại thoải mái):
 │   │   │                           # 1) Wikipedia: langlinks EN→VI → tên bài = name_vi, extract =
 │   │   │                           #    description_vi, thumbnail bù image (không key, free)
 │   │   │                           # 2) Gemini dịch batch attraction rate>=2 còn thiếu (6 điểm/call,
-│   │   │                           #    giãn 4.5s vì free tier ~15 req/phút). KHÔNG dịch tên quán ăn/
+│   │   │                           #    giãn 20s vì free tier ~15 req/phút). KHÔNG dịch tên quán ăn/
 │   │   │                           #    điểm thường — tên OSM bản địa đa số đã là tiếng Việt
+│   │   │                           # 3) enrichCostsFromGemini: ước tính avg_cost (vé vào cửa/giá 1 suất
+│   │   │                           #    ăn, VND) cho MỌI điểm còn NULL avg_cost (cả 2 category, không
+│   │   │                           #    lọc rate — dùng bởi budget module). Batch 40 điểm/call (chỉ trả
+│   │   │                           #    số nên gộp lớn hơn dịch được), clamp 0..5tr VND chống bịa giá.
 │   │   ├── place.dedupe.job.js    # Lọc trùng (OSM nhiều node/địa danh): gộp theo trùng wikipedia
 │   │   │                           # HOẶC tên chuẩn hoá (bỏ dấu) + cùng category + đủ gần (food
 │   │   │                           # <=100m vì quán chuỗi, attraction <=500m); giữ bản tốt nhất,
@@ -138,11 +158,24 @@ src/
 │   │   │                           # ai_jobs: queued→processing→completed/failed; AI best-effort
 │   │   ├── ai.personalizer.js     # Bước 5: prompt Gemini (JSON mode) → general_tips + tóm tắt
 │   │   │                           # ngày + food_suggestions tiếng Việt → trips.ai_summary
-│   │   ├── itinerary.service.js   # Orchestration: gom dữ liệu, gọi engine, group theo ngày
+│   │   ├── feedback.interpreter.js # POST /trips/:id/adjust — diễn giải góp ý tự do (vd "bỏ Bitexco",
+│   │   │                           # "đi chậm hơn") qua Gemini thành directive có cấu trúc
+│   │   │                           # (exclude_place_ids/pace/interests_add-remove). KHÁC ai.personalizer:
+│   │   │                           # đây là bước FUNCTIONAL — lỗi Gemini phải throw (controller trả lỗi
+│   │   │                           # cho user thử lại), không best-effort im lặng bỏ qua.
+│   │   ├── itinerary.service.js   # Orchestration: gom dữ liệu, gọi engine, group theo ngày.
+│   │   │                           # planTrip đọc trips.itinerary_adjustments (nếu có) để lọc bỏ
+│   │   │                           # exclude_place_ids khỏi attractions/foods và ghi đè pace/interests
+│   │   │                           # CHỈ cho lần sinh này (không đụng user_preferences toàn cục).
+│   │   │                           # submitFeedback gọi feedback.interpreter rồi CỘNG DỒN kết quả vào
+│   │   │                           # itinerary_adjustments (không tự sinh lại — controller enqueue lại
+│   │   │                           # đúng job 'trip-plan' sẵn có, tái dùng toàn bộ hạ tầng polling).
 │   │   ├── itinerary.repository.js # saveItinerary chạy TRANSACTION (xoá cũ→insert→status=planned)
 │   │   ├── job.repository.js      # CRUD bảng ai_jobs + chống double-enqueue (findActiveJobByTrip)
+│   │   │                           # + saveTripAdjustments (itinerary_adjustments)
 │   │   ├── job.route.js           # GET /jobs/:id — polling (auth, chỉ thấy job của mình)
-│   │   └── itinerary.controller.js
+│   │   └── itinerary.controller.js # + POST /trips/:id/adjust (adjustTrip) — trả changes_summary
+│   │                                # ngay (không cần đợi job xong) để FE hiện xác nhận sớm
 │   └── hotel_liteapi/         # Module hotel DUY NHẤT — LiteAPI (api.liteapi.travel/v3.0)
 │       ├── liteapi.client.js      # axios client, timeout 15s, keep-alive, retry (withRetry)
 │       ├── hotel.repository.js    # findByCity đọc DB trước (fallback live+cache); findByIds/

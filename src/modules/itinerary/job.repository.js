@@ -50,7 +50,13 @@ const saveTripBudgetSummary = async (tripId, budgetSummary) => {
   ]);
 };
 
+const saveTripAdjustments = async (tripId, adjustments) => {
+  await db.execute("UPDATE trips SET itinerary_adjustments = ? WHERE id = ?", [
+    JSON.stringify(adjustments), tripId,
+  ]);
+};
+
 module.exports = {
   createJob, updateJobStatus, findJobById, findActiveJobByTrip,
-  updateTripStatus, saveTripAiSummary, saveTripBudgetSummary,
+  updateTripStatus, saveTripAiSummary, saveTripBudgetSummary, saveTripAdjustments,
 };

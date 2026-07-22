@@ -18,6 +18,10 @@ const WIKI_DELAY_MS = 600; // giãn call Wikipedia — API công cộng hay 429 
 const GEMINI_BATCH_SIZE = 6; // desc dài ~1000 ký tự/điểm — batch nhỏ để không vượt maxOutputTokens
 const GEMINI_DELAY_MS = 20_000; // free tier giới hạn theo phút khá gắt — chậm mà chắc
 const GEMINI_429_WAIT_MS = 45_000; // dính 429 thì nghỉ dài rồi thử lại (tối đa 3 lần/batch)
+// Ước tính chi phí (avg_cost) chỉ trả về 1 số/điểm (không có mô tả dài) nên
+// gộp batch lớn hơn nhiều so với dịch mà vẫn an toàn với maxOutputTokens=4096
+const COST_BATCH_SIZE = 40;
+const COST_MAX_VND = 5_000_000; // chặn Gemini bịa giá phi thực tế (vé/suất ăn VN hiếm khi vượt mốc này)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -231,17 +235,85 @@ const enrichFromGemini = async () => {
   return ok;
 };
 
+// ─── Bước 3: Gemini ước tính chi phí (vé tham quan / giá 1 suất ăn) ──────────
+// Dùng cho budget.service.js — thay hằng số flat bằng avg_cost thật theo từng
+// điểm. Chạy cho CẢ 2 category (khác hằng số dịch chỉ chạy cho attraction rate>=2)
+// vì chi phí cần cho mọi điểm có khả năng được Planning Engine chọn vào lịch trình,
+// không riêng điểm nổi tiếng.
+const estimateCostBatch = async (batch) => {
+  const items = batch.map((p) => ({
+    id: p.id,
+    name: p.name,
+    category: p.category, // "attraction" | "food"
+    city: p.city_name,
+  }));
+
+  const prompt = `Bạn là chuyên gia du lịch Việt Nam. Ước tính chi phí trung bình (đơn vị VND) cho các địa điểm sau:
+- category "attraction": giá vé vào cửa trung bình cho 1 người lớn (0 nếu miễn phí — công viên/phố đi bộ/bãi biển/chùa công cộng...).
+- category "food": giá trung bình 1 phần ăn hoặc 1 đồ uống cho 1 người tại đó.
+Ước tính hợp lý dựa trên tên, loại và thành phố (giá ở thành phố lớn thường cao hơn tỉnh nhỏ). Không chắc thì ước theo mặt bằng chung của category đó.
+Trả về JSON mảng: [{"id": số, "avg_cost_vnd": số nguyên VND}] — đủ mọi id đầu vào, không thêm gì khác.
+QUAN TRỌNG: avg_cost_vnd phải là số JSON thuần (vd 1500000), TUYỆT ĐỐI KHÔNG dùng dấu phẩy/chấm ngăn cách hàng nghìn (KHÔNG viết 1,500,000 hay 1.500.000) — sẽ làm hỏng cú pháp JSON.
+
+Dữ liệu: ${JSON.stringify(items)}`;
+
+  const result = await generateJSON(prompt);
+  return Array.isArray(result) ? result : [];
+};
+
+const enrichCostsFromGemini = async () => {
+  if (!process.env.GEMINI_KEY) {
+    console.warn("[PlaceEnrich] Bỏ qua bước ước tính chi phí — chưa cấu hình GEMINI_KEY");
+    return 0;
+  }
+
+  const places = await placeRepository.findNeedingCostEstimate();
+  console.log(`[PlaceEnrich] Chi phí: ${places.length} điểm cần ước tính`);
+
+  let ok = 0;
+  for (let i = 0; i < places.length; i += COST_BATCH_SIZE) {
+    const batch = places.slice(i, i + COST_BATCH_SIZE);
+    try {
+      let estimated;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          estimated = await estimateCostBatch(batch);
+          break;
+        } catch (err) {
+          if (err.response?.status !== 429 || attempt >= 3) throw err;
+          console.log(`[PlaceEnrich] Gemini 429 — nghỉ ${GEMINI_429_WAIT_MS / 1000}s rồi thử lại...`);
+          await sleep(GEMINI_429_WAIT_MS);
+        }
+      }
+      for (const e of estimated) {
+        if (!batch.some((p) => p.id === e.id)) continue; // chống LLM bịa id
+        const raw = Number(e.avg_cost_vnd);
+        if (!Number.isFinite(raw) || raw < 0) continue;
+        await placeRepository.updateCost(e.id, Math.min(Math.round(raw), COST_MAX_VND));
+        ok++;
+      }
+    } catch (err) {
+      console.warn(`[PlaceEnrich] Chi phí lỗi batch ${i / COST_BATCH_SIZE + 1}:`, err.message);
+    }
+    if (i + COST_BATCH_SIZE < places.length) await sleep(GEMINI_DELAY_MS);
+  }
+
+  console.log(`[PlaceEnrich] Chi phí: ước tính xong ${ok}/${places.length} điểm`);
+  return ok;
+};
+
 // ─── enrichAllPlaces — gọi sau syncAllCities hoặc trigger thủ công ────────────
 const enrichAllPlaces = async () => {
   console.log(`[PlaceEnrich] Bắt đầu enrich lúc ${new Date().toISOString()}`);
   const repaired = await repairImageWidths();
   const wiki = await enrichFromWikipedia();
   const gemini = await enrichFromGemini();
-  console.log(`[PlaceEnrich] Hoàn thành — Repair: ${repaired}, Wikipedia: ${wiki}, Gemini: ${gemini}`);
-  return { repaired, wiki, gemini };
+  const cost = await enrichCostsFromGemini();
+  console.log(`[PlaceEnrich] Hoàn thành — Repair: ${repaired}, Wikipedia: ${wiki}, Gemini: ${gemini}, Chi phí: ${cost}`);
+  return { repaired, wiki, gemini, cost };
 };
 
 module.exports = {
-  enrichAllPlaces, enrichFromWikipedia, enrichFromGemini, repairImageWidths,
-  normalizeWikimediaThumbWidth,
+  enrichAllPlaces, enrichFromWikipedia, enrichFromGemini, enrichCostsFromGemini,
+  repairImageWidths, normalizeWikimediaThumbWidth,
 };

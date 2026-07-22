@@ -107,6 +107,25 @@ const updateEnrichment = async (id, { nameVi, descriptionVi, image }) => {
   );
 };
 
+// Điểm chưa có avg_cost (vé tham quan/giá 1 suất ăn) — dùng bởi Gemini cost enrich.
+// Ưu tiên rate cao trước (nhiều khả năng được Planning Engine chọn vào lịch trình),
+// kèm city_name để Gemini ước lượng theo mặt bằng giá từng địa phương.
+const findNeedingCostEstimate = async (limit = 1000) => {
+  const safeLimit = Math.max(parseInt(limit, 10) || 1000, 1);
+  const [rows] = await db.execute(
+    `SELECT p.id, p.name, p.category, p.kinds, l.city_name
+     FROM places p JOIN locations l ON p.location_id = l.id
+     WHERE p.avg_cost IS NULL AND p.is_active = 1
+     ORDER BY p.rate DESC
+     LIMIT ${safeLimit}`
+  );
+  return rows;
+};
+
+const updateCost = async (id, avgCost) => {
+  await db.execute(`UPDATE places SET avg_cost = ? WHERE id = ?`, [avgCost, id]);
+};
+
 // Tất cả điểm đang có ảnh dạng thumbnail Wikimedia "NNpx-..." — dùng để rà soát/sửa
 // lại width không chuẩn (xem normalizeWikimediaThumbWidth trong place.enrich.job.js).
 // Không lọc is_active vì ảnh cũ có thể còn ở bản ghi đã bị dedupe soft-delete.
@@ -165,4 +184,5 @@ module.exports = {
   fetchRadius, fetchDetail, bulkUpsertPlaces, findByLocation, countByLocation,
   findNeedingWikiEnrich, findNeedingTranslation, updateEnrichment,
   findImagesNeedingWidthCheck, setImage,
+  findNeedingCostEstimate, updateCost,
 };
