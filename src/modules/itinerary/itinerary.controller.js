@@ -64,4 +64,34 @@ const getItinerary = async (req, res) => {
   }
 };
 
-module.exports = { planTrip, getJob, getItinerary };
+// POST /trips/:id/adjust {feedback} — diễn giải góp ý (Gemini, functional nên
+// lỗi throw thẳng chứ không best-effort), lưu vào itinerary_adjustments, rồi
+// enqueue LẠI đúng job 'trip-plan' sẵn có để sinh lịch trình mới áp dụng thay đổi.
+// Trả kèm changes_summary ngay (không cần đợi job xong) để FE hiện xác nhận sớm.
+const adjustTrip = async (req, res) => {
+  try {
+    const tripId = Number(req.params.id);
+
+    // Chống double-enqueue giống planTrip — không cho góp ý thêm khi đang có job chạy dở
+    const active = await jobRepository.findActiveJobByTrip(tripId);
+    if (active) {
+      return response.error(res, "Lịch trình đang được sinh, vui lòng đợi xong rồi góp ý tiếp", 409);
+    }
+
+    const { changes_summary } = await itineraryService.submitFeedback(req.user.id, tripId, req.body.feedback);
+
+    const jobId = await jobRepository.createJob(tripId, req.user.id);
+    await enqueuePlanJob({ jobId, tripId, userId: req.user.id });
+
+    return response.ok(
+      res,
+      { job_id: jobId, status: "queued", changes_summary },
+      "Đã ghi nhận góp ý — đang sinh lại lịch trình",
+      202
+    );
+  } catch (error) {
+    return handleError(res, error, "Đã có lỗi xảy ra khi xử lý góp ý chỉnh sửa");
+  }
+};
+
+module.exports = { planTrip, getJob, getItinerary, adjustTrip };

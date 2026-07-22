@@ -11,7 +11,7 @@ const handleError = (res, error, fallbackMessage) => {
 
 const createTrip = async (req, res) => {
   try {
-    const { city_code, title, start_date, end_date, budget_total, num_people } = req.body;
+    const { city_code, title, start_date, end_date, budget_total, num_people, meal_cost_vnd } = req.body;
     const trip = await tripService.createTrip(req.user.id, {
       cityCode: city_code,
       title,
@@ -19,6 +19,7 @@ const createTrip = async (req, res) => {
       endDate: end_date,
       budgetTotal: budget_total,
       numPeople: num_people,
+      mealCostVnd: meal_cost_vnd,
     });
     return response.created(res, trip, "Tạo chuyến đi thành công");
   } catch (error) {
@@ -47,7 +48,7 @@ const getTripById = async (req, res) => {
 
 const updateTrip = async (req, res) => {
   try {
-    const { city_code, title, start_date, end_date, budget_total, num_people } = req.body;
+    const { city_code, title, start_date, end_date, budget_total, num_people, meal_cost_vnd } = req.body;
     const trip = await tripService.updateTrip(req.user.id, Number(req.params.id), {
       cityCode: city_code,
       title,
@@ -55,6 +56,7 @@ const updateTrip = async (req, res) => {
       endDate: end_date,
       budgetTotal: budget_total,
       numPeople: num_people,
+      mealCostVnd: meal_cost_vnd,
     });
     return response.ok(res, trip, "Cập nhật chuyến đi thành công");
   } catch (error) {

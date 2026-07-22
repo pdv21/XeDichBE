@@ -50,11 +50,17 @@ const INTEREST_KINDS = {
   shopping:  ["malls", "marketplaces", "shops"],
 };
 
+// Mốc "đắt" để chuẩn hoá priceScore — avg_cost lưu VND (vé tham quan/giá 1 suất
+// ăn), 300k coi như cao cấp cho du lịch nội địa VN. Trước đây chia /50 theo mốc
+// USD trong khi avg_cost thực chất là VND — bug tiềm ẩn (priceScore luôn ~0 một
+// khi avg_cost được điền), chưa lộ ra vì avg_cost trước giờ luôn NULL.
+const PRICE_NORMALIZE_VND = 300_000;
+
 const scorePlace = (place, { center, radiusKm, interests, weights, maxRate = 7 }) => {
-  // priceScore: OpenTripMap không có giá — avg_cost NULL thì trung tính 0.5;
-  // có giá thì càng rẻ điểm càng cao (chuẩn hoá theo mốc 50 USD)
+  // priceScore: avg_cost NULL (chưa enrich) thì trung tính 0.5; có giá thì càng
+  // rẻ điểm càng cao, chuẩn hoá theo PRICE_NORMALIZE_VND
   const priceScore =
-    place.avg_cost == null ? 0.5 : 1 - Math.min(Number(place.avg_cost) / 50, 1);
+    place.avg_cost == null ? 0.5 : 1 - Math.min(Number(place.avg_cost) / PRICE_NORMALIZE_VND, 1);
 
   // ratingScore: chuẩn hoá theo rate CAO NHẤT của thành phố thay vì thang
   // cứng /7 — nhiều thành phố VN max rate chỉ 3, chia /7 làm chênh lệch giữa

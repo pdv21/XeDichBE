@@ -141,6 +141,9 @@ CREATE TABLE IF NOT EXISTS trips (
   end_date     DATE NOT NULL,
   budget_total DECIMAL(12,2),
   num_people   TINYINT UNSIGNED DEFAULT 1,
+  -- Giá ước tính/bữa/người (VND) do user tự chọn — ghi đè mặc định toàn hệ thống
+  -- BUDGET_MEAL_COST_VND khi tính budget (xem budget.service.js). NULL = dùng mặc định.
+  meal_cost_vnd DECIMAL(10,0) NULL,
   -- draft: mới tạo; planning: job sinh lịch trình đang chạy;
   -- planned: đã có lịch trình; failed: job lỗi
   status       ENUM('draft','planning','planned','failed') DEFAULT 'draft',
@@ -152,6 +155,14 @@ CREATE TABLE IF NOT EXISTS trips (
   -- khách sạn được chọn theo ngân sách còn lại, pace có thể bị hạ để vừa budget.
   -- Xem budget.service.js#fitBudgetForPlanning. NULL nếu chưa plan.
   budget_summary JSON NULL,
+  -- Điều chỉnh lịch trình do user yêu cầu bằng ngôn ngữ tự nhiên (feedback.interpreter.js
+  -- diễn giải qua Gemini thành directive có cấu trúc, cộng dồn qua nhiều lần góp ý):
+  -- { exclude_place_ids:[...], pace:"relaxed"|"moderate"|"packed"|null,
+  --   interests_add:[...], interests_remove:[...],
+  --   history:[{feedback, applied_at, changes_summary}] }
+  -- Được itinerary.service.js#planTrip đọc và áp dụng LÊN TRÊN user_preferences gốc
+  -- (chỉ ảnh hưởng trip này, không đổi preferences toàn cục của user). NULL = chưa điều chỉnh.
+  itinerary_adjustments JSON NULL,
   created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 

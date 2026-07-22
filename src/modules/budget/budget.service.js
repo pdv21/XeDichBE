@@ -1,6 +1,7 @@
 const tripService = require("../trip/trip.service");
 const hotelService = require("../hotel_liteapi/hotel.service");
 const flightService = require("../flight/flight.service");
+const { generateItinerary, distanceKm } = require("../itinerary/planning.engine");
 const db = require("../../shared/config/database");
 
 const validationError = (message, statusCode) => Object.assign(new Error(message), { statusCode });
@@ -8,13 +9,36 @@ const validationError = (message, statusCode) => Object.assign(new Error(message
 // Toàn bộ budget tính bằng VND. Khách sạn lấy giá VND trực tiếp từ LiteAPI;
 // vé bay Ignav chỉ trả USD → quy đổi qua tỷ giá USD_VND_RATE (env, cập nhật
 // tay khi tỷ giá biến động mạnh — đồ án không cần API tỷ giá real-time).
-const MEAL_COST = Number(process.env.BUDGET_MEAL_COST_VND) || 100_000;            // 1 bữa/người
-const UNKNOWN_ATTRACTION_FEE = Number(process.env.BUDGET_ATTRACTION_FEE_VND) || 50_000; // vé vào cửa ước tính khi không có dữ liệu
-const LOCAL_TRANSPORT_PER_DAY = Number(process.env.BUDGET_TRANSPORT_VND_PER_DAY) || 250_000; // taxi/xe máy cả nhóm/ngày
+//
+// Ăn uống + vé tham quan + di chuyển giờ tính từ DỮ LIỆU THỰC của lịch trình đã
+// sinh (quán ăn/điểm tham quan cụ thể được chọn, khoảng cách di chuyển thật giữa
+// các điểm) thay vì hằng số cố định — xem computeMealCostFromActivities,
+// computeAttractionCostFromActivities, computeTransportFromActivities bên dưới.
+// Các hằng số *_FALLBACK_VND chỉ còn dùng khi:
+//   - places.avg_cost chưa được enrich (place.enrich.job.js#enrichCostsFromGemini
+//     chưa chạy tới điểm đó, hoặc Gemini lỗi) → fallback theo điểm
+//   - bữa sáng: engine không xếp quán cụ thể (giả định ăn gần khách sạn)
+//   - GET /trips/:id/budget gọi TRƯỚC khi trip có lịch trình (chưa có route thật)
+const MEAL_COST = Number(process.env.BUDGET_MEAL_COST_VND) || 100_000;
+const ATTRACTION_FEE_FALLBACK_VND = Number(process.env.BUDGET_ATTRACTION_FEE_VND) || 50_000;
+const TRANSPORT_FALLBACK_VND_PER_DAY = Number(process.env.BUDGET_TRANSPORT_VND_PER_DAY) || 250_000;
+
+// Cước di chuyển nội thành ước tính theo mô hình Grab thực tế: phí mở cửa + phí/km.
+// Xe máy khi nhóm nhỏ (mỗi người 1 xe), ô tô 4 chỗ khi nhóm >2 (ceil(n/4) xe).
+const TRANSPORT_BIKE_BASE_VND = Number(process.env.BUDGET_TRANSPORT_BIKE_BASE_VND) || 13_000;
+const TRANSPORT_BIKE_PER_KM_VND = Number(process.env.BUDGET_TRANSPORT_BIKE_PER_KM_VND) || 4_300;
+const TRANSPORT_CAR_BASE_VND = Number(process.env.BUDGET_TRANSPORT_CAR_BASE_VND) || 20_000;
+const TRANSPORT_CAR_PER_KM_VND = Number(process.env.BUDGET_TRANSPORT_CAR_PER_KM_VND) || 12_000;
+// Haversine đo đường chim bay, đường thật (có khúc cua, một chiều...) luôn dài hơn
+const TRANSPORT_ROAD_FACTOR = Number(process.env.BUDGET_TRANSPORT_ROAD_FACTOR) || 1.3;
+
 const USD_VND_RATE = Number(process.env.USD_VND_RATE) || 26_500;
 
 // VND không có số lẻ — làm tròn về nghìn đồng cho dễ đọc
 const roundVnd = (n) => Math.round(n / 1000) * 1000;
+
+// User có thể tự chọn giá/bữa lúc tạo trip (trips.meal_cost_vnd) — ghi đè mặc định hệ thống
+const resolveMealCost = (trip) => (trip.meal_cost_vnd != null ? Number(trip.meal_cost_vnd) : MEAL_COST);
 
 // mysql2 trả cột DATE thành JS Date object — String().slice(0,10) sẽ ra
 // "Sun Sep 20" chứ KHÔNG phải "2026-09-20". Dùng local getters cho đúng.
@@ -33,6 +57,92 @@ const parseJson = (v) => {
   if (v == null) return null;
   if (typeof v !== "string") return v;
   try { return JSON.parse(v); } catch { return null; }
+};
+
+// ─── Chi phí thực từ danh sách activity {day_index, order_index, activity_type, place} ──
+// Dùng chung bởi fitBudgetForPlanning (lịch trình vừa sinh, chưa lưu DB) và
+// estimateFromItinerary (lịch trình đã lưu, đọc lại từ trip_activities) — cả 2
+// đều map dữ liệu về đúng shape này trước khi gọi.
+
+// Xe máy (nhóm ≤2, mỗi người 1 xe) hoặc ô tô 4 chỗ (ceil(n/4) xe) cho nhóm lớn hơn
+const vehicleFare = (numPeople) => {
+  if (numPeople <= 2) {
+    return { base: TRANSPORT_BIKE_BASE_VND * numPeople, perKm: TRANSPORT_BIKE_PER_KM_VND * numPeople };
+  }
+  const cars = Math.ceil(numPeople / 4);
+  return { base: TRANSPORT_CAR_BASE_VND * cars, perKm: TRANSPORT_CAR_PER_KM_VND * cars };
+};
+
+// Tổng quãng đường thật trong từng ngày (nối các điểm theo đúng order_index đã xếp)
+// × cước xe theo số người — thay cho hằng số cố định/ngày trước đây
+const computeTransportFromActivities = (activities, numPeople) => {
+  const byDay = new Map();
+  for (const a of activities) {
+    if (!byDay.has(a.day_index)) byDay.set(a.day_index, []);
+    byDay.get(a.day_index).push(a);
+  }
+
+  const fare = vehicleFare(numPeople);
+  let totalKm = 0;
+  let total = 0;
+  for (const dayActs of byDay.values()) {
+    const ordered = [...dayActs].sort((a, b) => a.order_index - b.order_index);
+    let km = 0;
+    for (let i = 1; i < ordered.length; i++) {
+      const p1 = ordered[i - 1].place;
+      const p2 = ordered[i].place;
+      km += distanceKm(Number(p1.latitude), Number(p1.longitude), Number(p2.latitude), Number(p2.longitude));
+    }
+    km *= TRANSPORT_ROAD_FACTOR;
+    totalKm += km;
+    total += fare.base + km * fare.perKm;
+  }
+
+  return { total: roundVnd(total), distance_km: Math.round(totalKm * 10) / 10 };
+};
+
+// Chi phí ước tính (VND/người) cho MỘT activity cụ thể — nguồn sự thật duy nhất
+// dùng cả để cộng tổng (2 hàm compute* bên dưới) LẪN hiển thị per-item trong
+// GET /trips/:id/itinerary (xem itinerary.service.js#groupByDay), đảm bảo tổng
+// luôn khớp với từng dòng hiển thị. is_estimated=true nghĩa là avg_cost chưa
+// enrich (hoặc bữa sáng — không gắn quán cụ thể) nên đang dùng giá fallback.
+const resolveActivityCost = (activity, trip) => {
+  const known = activity.place.avg_cost;
+  if (known != null) return { cost: Number(known), is_estimated: false };
+  const fallback = activity.activity_type === "meal" ? resolveMealCost(trip) : ATTRACTION_FEE_FALLBACK_VND;
+  return { cost: fallback, is_estimated: true };
+};
+
+// Vé tham quan: cộng avg_cost thật của từng điểm visit đã enrich (Gemini estimate,
+// xem place.enrich.job.js#enrichCostsFromGemini); điểm chưa có giá → fallback flat
+const computeAttractionCostFromActivities = (activities, numPeople, trip) => {
+  const visits = activities.filter((a) => a.activity_type === "visit");
+  let known = 0;
+  let estimatedTotal = 0;
+  for (const v of visits) {
+    const { cost, is_estimated } = resolveActivityCost(v, trip);
+    estimatedTotal += cost;
+    if (!is_estimated) known += cost;
+  }
+  return {
+    count: visits.length,
+    known_cost: roundVnd(known * numPeople),
+    estimated_total: roundVnd(estimatedTotal * numPeople),
+  };
+};
+
+// Ăn uống: trưa+tối dùng avg_cost thật của quán đã chọn (fallback flat nếu quán
+// chưa có giá); bữa sáng không gắn quán cụ thể trong engine (ăn gần khách sạn) →
+// luôn dùng giá ước tính (mặc định hệ thống hoặc trip.meal_cost_vnd nếu user set)
+const computeMealCostFromActivities = (activities, days, numPeople, trip) => {
+  const mealActs = activities.filter((a) => a.activity_type === "meal");
+  const fallback = resolveMealCost(trip);
+
+  let total = mealActs.reduce((s, m) => s + resolveActivityCost(m, trip).cost, 0);
+  total += days * fallback; // bữa sáng
+
+  const mealCount = (mealActs.length + days) * numPeople;
+  return { count: mealCount, total: roundVnd(total * numPeople) };
 };
 
 // ─── Khách sạn: giá thật từ LiteAPI ──────────────────────────────────────────
@@ -153,71 +263,69 @@ const estimateFlight = async (trip, originAirport) => {
   };
 };
 
-// ─── Ăn uống + vé tham quan: từ lịch trình đã sinh (nếu có) ──────────────────
+// ─── Ăn uống + vé tham quan + di chuyển: từ lịch trình đã sinh (nếu có) ───────
+// Đọc lại đúng route đã lưu (thứ tự ngày/điểm + toạ độ + avg_cost thật của từng
+// quán/điểm) rồi tái dùng chung 3 hàm compute* — kết quả khớp với lúc sinh lịch
+// trình (fitBudgetForPlanning) vì cùng công thức, khác nguồn: đây đọc DB, kia
+// đọc thẳng output generateItinerary.
 const estimateFromItinerary = async (trip, days) => {
-  const [acts] = await db.execute(
-    `SELECT ta.activity_type, p.avg_cost
+  const [rows] = await db.execute(
+    `SELECT ta.day_index, ta.order_index, ta.activity_type, p.avg_cost, p.latitude, p.longitude
      FROM trip_activities ta JOIN places p ON ta.place_id = p.id
-     WHERE ta.trip_id = ?`,
+     WHERE ta.trip_id = ?
+     ORDER BY ta.day_index ASC, ta.order_index ASC`,
     [trip.id]
   );
 
-  if (acts.length === 0) {
-    // Chưa sinh lịch trình → ước theo mặc định: 3 bữa/ngày, 3 điểm tham quan/ngày
+  if (rows.length === 0) {
+    // Chưa sinh lịch trình → chưa có route thật, ước theo mặc định thô:
+    // 3 bữa/ngày, 3 điểm tham quan/ngày, transport flat/ngày
+    const mealCost = resolveMealCost(trip);
     return {
       has_itinerary: false,
       meals: {
         count: days * 3 * trip.num_people,
-        total: roundVnd(days * 3 * trip.num_people * MEAL_COST),
+        total: roundVnd(days * 3 * trip.num_people * mealCost),
       },
       attractions: {
         count: days * 3,
         known_cost: 0,
-        estimated_total: roundVnd(days * 3 * trip.num_people * UNKNOWN_ATTRACTION_FEE),
+        estimated_total: roundVnd(days * 3 * trip.num_people * ATTRACTION_FEE_FALLBACK_VND),
       },
+      transport: { total: roundVnd(days * TRANSPORT_FALLBACK_VND_PER_DAY), distance_km: null },
     };
   }
 
-  const meals = acts.filter((a) => a.activity_type === "meal");
-  const visits = acts.filter((a) => a.activity_type === "visit");
-  // Lịch trình chỉ xếp trưa+tối — cộng thêm bữa sáng mỗi ngày
-  const mealCount = (meals.length + days) * trip.num_people;
-
-  const knownCost = visits.reduce((s, v) => s + (v.avg_cost != null ? Number(v.avg_cost) : 0), 0);
-  const unknownCount = visits.filter((v) => v.avg_cost == null).length;
+  const activities = rows.map((r) => ({
+    day_index: r.day_index,
+    order_index: r.order_index,
+    activity_type: r.activity_type,
+    place: { avg_cost: r.avg_cost, latitude: r.latitude, longitude: r.longitude },
+  }));
 
   return {
     has_itinerary: true,
-    meals: { count: mealCount, total: roundVnd(mealCount * MEAL_COST) },
-    attractions: {
-      count: visits.length,
-      known_cost: roundVnd(knownCost * trip.num_people),
-      estimated_total: roundVnd((knownCost + unknownCount * UNKNOWN_ATTRACTION_FEE) * trip.num_people),
-    },
+    meals: computeMealCostFromActivities(activities, days, trip.num_people, trip),
+    attractions: computeAttractionCostFromActivities(activities, trip.num_people, trip),
+    transport: computeTransportFromActivities(activities, trip.num_people),
   };
 };
 
 // ─── fitBudgetForPlanning — dùng bởi itinerary khi sinh lịch trình ────────────
-// Tính TRƯỚC KHI xếp lịch: từ ngân sách trừ đi chi phí cố định (ăn/vé/di chuyển
-// theo pace), phần còn lại chọn khách sạn phù hợp. Nếu pace user muốn làm tổng
-// vượt budget → tự hạ pace (packed→moderate→relaxed). Vẫn vượt → cảnh báo.
+// Tính TRƯỚC KHI lưu lịch: với mỗi pace ứng viên, chạy THẬT generateItinerary
+// (thuật toán thuần, không I/O — rẻ để gọi lặp lại) rồi tính chi phí ăn/vé/di
+// chuyển từ ĐÚNG route+quán+điểm vừa sinh (xem 3 hàm compute* ở trên) thay vì suy
+// ra từ số lượng ước tính. Phần ngân sách còn lại sau chi phí cố định dùng để
+// chọn khách sạn phù hợp. Nếu pace user muốn làm tổng vượt budget → tự hạ pace
+// (packed→moderate→relaxed) và THỬ LẠI TOÀN BỘ (route đổi theo số điểm/ngày nên
+// chi phí đi lại/ăn uống cũng đổi theo, không chỉ số điểm tham quan).
+// Lịch trình được chọn ở đây trả kèm trong `activities` — itinerary.service.js
+// dùng thẳng, không cần sinh lại lần 2.
 // Vé bay KHÔNG tính ở đây (trip không lưu điểm xuất phát) — có ghi chú trong summary.
-const ATTRACTIONS_PER_DAY = { relaxed: 2, moderate: 3, packed: 4 };
 const PACE_DOWNGRADE = { packed: "moderate", moderate: "relaxed", relaxed: null };
 // Chọn khách sạn đắt nhất còn ≤ 85% ngân sách còn lại (chừa 15% dự phòng);
 // nếu không có thì lấy phương án rẻ nhất vừa túi
 const HOTEL_BUDGET_RATIO = 0.85;
-
-const fixedCostsForPace = (pace, days, numPeople) => {
-  const visits = days * (ATTRACTIONS_PER_DAY[pace] ?? 3);
-  const mealCount = days * 3 * numPeople; // sáng + trưa + tối
-  return {
-    visits,
-    meals: { count: mealCount, total: roundVnd(mealCount * MEAL_COST) },
-    attractions: { count: visits, total: roundVnd(visits * numPeople * UNKNOWN_ATTRACTION_FEE) },
-    transport: roundVnd(days * LOCAL_TRANSPORT_PER_DAY),
-  };
-};
 
 const pickHotel = (options, remaining) => {
   const affordable = options.filter((o) => o.price <= remaining);
@@ -226,7 +334,27 @@ const pickHotel = (options, remaining) => {
   return (comfy.length > 0 ? comfy : affordable).at(-1); // options đã sort tăng dần
 };
 
-const fitBudgetForPlanning = async (trip, wishedPace = "moderate") => {
+// Sinh thử lịch trình cho 1 pace + tính chi phí thật từ kết quả đó
+const tryPace = (pace, days, trip, engineInputs) => {
+  const activities = generateItinerary({
+    attractions: engineInputs.attractions,
+    foods: engineInputs.foods,
+    days,
+    center: engineInputs.center,
+    radiusKm: engineInputs.radiusKm,
+    preferences: { ...engineInputs.preferences, pace },
+  });
+  const costs = {
+    meals: computeMealCostFromActivities(activities, days, trip.num_people, trip),
+    attractions: computeAttractionCostFromActivities(activities, trip.num_people, trip),
+    transport: computeTransportFromActivities(activities, trip.num_people),
+  };
+  return { activities, costs };
+};
+
+// engineInputs = { attractions, foods, center, radiusKm, preferences } — nguyên liệu
+// cho generateItinerary, itinerary.service.js đã fetch sẵn (tránh query lại 2 lần)
+const fitBudgetForPlanning = async (trip, wishedPace = "moderate", engineInputs) => {
   const nights = Math.round((new Date(trip.end_date) - new Date(trip.start_date)) / 86_400_000);
   const days = nights + 1;
   const budgetTotal = trip.budget_total != null ? Number(trip.budget_total) : null;
@@ -237,18 +365,21 @@ const fitBudgetForPlanning = async (trip, wishedPace = "moderate") => {
 
   // Không có ngân sách → giữ nguyên pace, gợi ý khách sạn mức trung vị
   if (budgetTotal == null) {
-    const costs = fixedCostsForPace(wishedPace, days, trip.num_people);
+    const { activities, costs } = tryPace(wishedPace, days, trip, engineInputs);
     const selected = options.length > 0
       ? options[Math.floor(options.length / 2)]
       : null;
-    return { effectivePace: wishedPace, wishedPace, days, rooms, costs, selected, options, prices, budgetTotal, warnings };
+    return { effectivePace: wishedPace, wishedPace, days, rooms, costs, selected, options, prices, budgetTotal, warnings, activities };
   }
 
   // Thử pace user muốn, hạ dần nếu tổng vượt budget
   let pace = wishedPace;
+  let lastAttempt = null;
   while (pace) {
-    const costs = fixedCostsForPace(pace, days, trip.num_people);
-    const fixed = costs.meals.total + costs.attractions.total + costs.transport;
+    const attempt = tryPace(pace, days, trip, engineInputs);
+    lastAttempt = { ...attempt, pace };
+    const { costs } = attempt;
+    const fixed = costs.meals.total + costs.attractions.estimated_total + costs.transport.total;
     const remaining = budgetTotal - fixed;
     const selected = pickHotel(options, remaining);
 
@@ -259,22 +390,22 @@ const fitBudgetForPlanning = async (trip, wishedPace = "moderate") => {
       if (options.length === 0) {
         warnings.push("Không lấy được giá khách sạn — chi phí khách sạn chưa gồm trong tổng");
       }
-      return { effectivePace: pace, wishedPace, days, rooms, costs, selected, options, prices, budgetTotal, warnings };
+      return { effectivePace: pace, wishedPace, days, rooms, costs, selected, options, prices, budgetTotal, warnings, activities: attempt.activities };
     }
     pace = PACE_DOWNGRADE[pace];
   }
 
   // Đến relaxed + khách sạn rẻ nhất vẫn vượt budget → trả phương án tối thiểu kèm cảnh báo
-  const costs = fixedCostsForPace("relaxed", days, trip.num_people);
+  const { activities, costs } = lastAttempt.pace === "relaxed" ? lastAttempt : tryPace("relaxed", days, trip, engineInputs);
   const selected = options[0] ?? null;
-  const minTotal = costs.meals.total + costs.attractions.total + costs.transport + (selected?.price ?? 0);
+  const minTotal = costs.meals.total + costs.attractions.estimated_total + costs.transport.total + (selected?.price ?? 0);
   warnings.push(
     `Ngân sách ${roundVnd(budgetTotal).toLocaleString("vi-VN")}đ quá thấp — phương án tiết kiệm nhất cũng cần ~${roundVnd(minTotal).toLocaleString("vi-VN")}đ`
   );
   if (wishedPace !== "relaxed") {
     warnings.push(`Đã giảm nhịp độ từ "${wishedPace}" xuống "relaxed" để tiết kiệm tối đa`);
   }
-  return { effectivePace: "relaxed", wishedPace, days, rooms, costs, selected, options, prices, budgetTotal, warnings };
+  return { effectivePace: "relaxed", wishedPace, days, rooms, costs, selected, options, prices, budgetTotal, warnings, activities };
 };
 
 // Ghép fit thành summary JSON lưu vào trips.budget_summary (đọc kèm itinerary)
@@ -301,7 +432,7 @@ const buildPlanBudgetSummary = async (fit) => {
 
   const hotelCost = fit.selected ? roundVnd(fit.selected.price) : 0;
   const total = roundVnd(
-    hotelCost + fit.costs.meals.total + fit.costs.attractions.total + fit.costs.transport
+    hotelCost + fit.costs.meals.total + fit.costs.attractions.estimated_total + fit.costs.transport.total
   );
 
   return {
@@ -311,7 +442,7 @@ const buildPlanBudgetSummary = async (fit) => {
     hotel: hotelInfo,
     meals: fit.costs.meals,
     attractions: fit.costs.attractions,
-    local_transport: { total: fit.costs.transport },
+    local_transport: fit.costs.transport,
     total_estimate: total,
     budget_total: fit.budgetTotal,
     ...(fit.budgetTotal != null && {
@@ -336,15 +467,13 @@ const estimateBudget = async (userId, tripId, { origin } = {}) => {
     origin ? estimateFlight(trip, String(origin).toUpperCase()) : Promise.resolve(null),
   ]);
 
-  const transport = roundVnd(days * LOCAL_TRANSPORT_PER_DAY);
-
   // Tổng ưu tiên khách sạn đã chọn khi plan (đồng nhất với budget_summary);
   // chưa plan thì theo mức trung vị; không có giá nào thì bỏ qua thành phần đó
   const hotelCost = hotel ? (hotel.selected?.price ?? hotel.standard ?? 0) : 0;
   const flightCost = flight?.available ? flight.total : 0;
   const total = roundVnd(
     hotelCost + flightCost + activityCosts.meals.total +
-    activityCosts.attractions.estimated_total + transport
+    activityCosts.attractions.estimated_total + activityCosts.transport.total
   );
 
   const budgetTotal = trip.budget_total != null ? Number(trip.budget_total) : null;
@@ -361,7 +490,7 @@ const estimateBudget = async (userId, tripId, { origin } = {}) => {
       flight: flight ?? { note: "Truyền ?origin=HAN (mã sân bay đi) để ước tính vé bay" },
       meals: activityCosts.meals,
       attractions: activityCosts.attractions,
-      local_transport: { per_day: LOCAL_TRANSPORT_PER_DAY, total: transport },
+      local_transport: activityCosts.transport,
     },
     has_itinerary: activityCosts.has_itinerary,
     total_estimate: total,
@@ -373,4 +502,4 @@ const estimateBudget = async (userId, tripId, { origin } = {}) => {
   };
 };
 
-module.exports = { estimateBudget, fitBudgetForPlanning, buildPlanBudgetSummary };
+module.exports = { estimateBudget, fitBudgetForPlanning, buildPlanBudgetSummary, resolveActivityCost };

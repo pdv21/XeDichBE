@@ -1,10 +1,10 @@
 const db = require("../../shared/config/database");
 
-const createTrip = async ({ userId, locationId, title, startDate, endDate, budgetTotal, numPeople }) => {
+const createTrip = async ({ userId, locationId, title, startDate, endDate, budgetTotal, numPeople, mealCostVnd }) => {
   const [result] = await db.execute(
-    `INSERT INTO trips (user_id, location_id, title, start_date, end_date, budget_total, num_people)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [userId, locationId, title ?? null, startDate, endDate, budgetTotal ?? null, numPeople ?? 1]
+    `INSERT INTO trips (user_id, location_id, title, start_date, end_date, budget_total, num_people, meal_cost_vnd)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [userId, locationId, title ?? null, startDate, endDate, budgetTotal ?? null, numPeople ?? 1, mealCostVnd ?? null]
   );
   return result.insertId;
 };
@@ -51,6 +51,7 @@ const updateTrip = async (tripId, fields) => {
     endDate: "end_date",
     budgetTotal: "budget_total",
     numPeople: "num_people",
+    mealCostVnd: "meal_cost_vnd",
     status: "status",
   };
 

@@ -10,7 +10,7 @@ const parseDate = (s) => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 
-const validateTripInput = ({ startDate, endDate, numPeople, budgetTotal }, { isCreate }) => {
+const validateTripInput = ({ startDate, endDate, numPeople, budgetTotal, mealCostVnd }, { isCreate }) => {
   const start = parseDate(startDate);
   const end = parseDate(endDate);
 
@@ -43,13 +43,21 @@ const validateTripInput = ({ startDate, endDate, numPeople, budgetTotal }, { isC
       throw validationError("budget_total phải là số không âm", 400);
     }
   }
+  if (mealCostVnd !== undefined && mealCostVnd !== null) {
+    const m = Number(mealCostVnd);
+    // Chặn giá trị vô lý (0 đồng, số âm, hay gõ nhầm thêm số 0) — vẫn đủ rộng
+    // cho từ ăn vỉa hè tới nhà hàng cao cấp
+    if (Number.isNaN(m) || m <= 0 || m > 5_000_000) {
+      throw validationError("meal_cost_vnd phải là số dương, tối đa 5.000.000đ", 400);
+    }
+  }
 };
 
-const createTrip = async (userId, { cityCode, title, startDate, endDate, budgetTotal, numPeople }) => {
+const createTrip = async (userId, { cityCode, title, startDate, endDate, budgetTotal, numPeople, mealCostVnd }) => {
   if (!cityCode) {
     throw validationError("city_code là bắt buộc", 400);
   }
-  validateTripInput({ startDate, endDate, numPeople, budgetTotal }, { isCreate: true });
+  validateTripInput({ startDate, endDate, numPeople, budgetTotal, mealCostVnd }, { isCreate: true });
 
   const location = await locationRepository.findByCityCode(cityCode);
   if (!location) {
@@ -64,6 +72,7 @@ const createTrip = async (userId, { cityCode, title, startDate, endDate, budgetT
     endDate,
     budgetTotal,
     numPeople,
+    mealCostVnd,
   });
 
   return tripRepository.findByIdWithLocation(tripId);
@@ -94,7 +103,7 @@ const getMyTrips = async (userId, { page = 1, pageSize = 20 }) => {
   };
 };
 
-const updateTrip = async (userId, tripId, { cityCode, title, startDate, endDate, budgetTotal, numPeople }) => {
+const updateTrip = async (userId, tripId, { cityCode, title, startDate, endDate, budgetTotal, numPeople, mealCostVnd }) => {
   const trip = await getOwnedTrip(userId, tripId);
 
   if (trip.status !== "draft") {
@@ -108,6 +117,7 @@ const updateTrip = async (userId, tripId, { cityCode, title, startDate, endDate,
       endDate: endDate ?? trip.end_date,
       numPeople,
       budgetTotal,
+      mealCostVnd,
     },
     { isCreate: false }
   );
@@ -128,6 +138,7 @@ const updateTrip = async (userId, tripId, { cityCode, title, startDate, endDate,
     endDate,
     budgetTotal,
     numPeople,
+    mealCostVnd,
   });
 
   return tripRepository.findByIdWithLocation(tripId);
